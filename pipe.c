@@ -2,16 +2,15 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #define MSGSIZE 6
 
-int parent(int *);
-int child(int *);
+int client(int *);
+int server(int *);
+void *CreateComponent(void *ptr);
 int fatal(char *s); /* 오류 메시지를 프린트하고 죽는다. */
-
-char *msg1 = "hello";
-char *msg2 = "bye!!";
 
 int main()
 {
@@ -30,21 +29,21 @@ int main()
     case -1: /* 오류 */
         fatal("fork call");
     case 0: /* 자식 */
-        child(pfd);
+        client(pfd);
     default: /* 부모 */
-        parent(pfd);
+        server(pfd);
     }
 }
 
-int parent(int p[2]) /* 부모의 코드 */
+int client(int p[2]) /* 부모의 코드 */
 {
     int nread;
-    char buf[MSGSIZE];
+    int component;
 
     close(p[1]);
     for (;;)
     {
-        switch (nread = read(p[0], buf, MSGSIZE))
+        switch (nread = read(p[0], &component, sizeof(int)))
         {
         case -1:
             /* 파이프에 아무것도 없는지 검사한다. */
@@ -61,26 +60,59 @@ int parent(int p[2]) /* 부모의 코드 */
             printf("End of conversation\n");
             exit(0);
         default:
-            printf("MSG=%s\n", buf);
+            printf("%d components received\n", component);
         }
     }
 }
 
-int child(int p[2])
+int server(int p[2])
 {
-    int count;
+    int number_of_components = 0;
     close(p[0]);
-    for (count = 0; count < 3; count++)
+    pthread_t thread[100];
+    int i = 0;
+
+    int err_code;
+    printf("In main: creating thread %d\n", i);
+    for (int i = 0; i < 3; i++)
     {
-        write(p[1], msg1, MSGSIZE);
-        sleep(3);
+        err_code = pthread_create(&thread[i], NULL, CreateComponent, (void *)&number_of_components);
+        if (err_code)
+        {
+            printf("ERROR code is %d\n", err_code);
+            exit(1);
+        }
     }
-    /* 마지막 메시지를 보낸다 */
-    write(p[1], msg2, MSGSIZE);
-    exit(0);
+    for (;;)
+    {
+        // number_of_components를 pipe로 write한다.
+        if (number_of_components > 0)
+        {
+            printf("%dcomponents has send to client \n", number_of_components);
+            if (write(p[1], &number_of_components, sizeof(int)) == -1)
+                fatal("write call");
+            number_of_components = 0;
+        }
+        sleep(2);
+    }
 }
+
 int fatal(char *s) /* 오류 메시지를 프린트하고 죽는다. */
 {
     perror(s);
     exit(1);
+}
+
+void *CreateComponent(void *ptr)
+{
+    int *number_of_components = (int *)ptr;
+    int j;
+    int i = 0;
+    for (;;)
+    {
+        // 3초에 한 번 number_of_compenets의 값을 1 증가시킨다.
+        sleep(1);
+        *number_of_components++;
+        printf("number_of_components = %d\n", *number_of_components);
+    }
 }
