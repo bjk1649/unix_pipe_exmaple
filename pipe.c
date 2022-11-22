@@ -5,21 +5,23 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <semaphore.h>
 
-#define MSGSIZE 6
+#define MSGSIZE 16
 
-int client(int *);
-int server(int *);
+static sem_t component_sem;
+static sem_t client_component_sem;
+
+int client(int *, int *, int);
+int server(int *, int *, int *);
 void *CreateComponent(void *ptr);
-int fatal(char *s); /* 오류 메시지를 프린트하고 죽는다. */
+int fatal(char *s);
 void *makeCar(void *ptr);
 void *paintCar(void *ptr);
 void *inspectCar(void *ptr);
 
-typedef struct Component
-{
-    int component;
-} Component;
+int component_number = 0;
+int component_number2 = 0;
 
 typedef struct Car
 {
@@ -31,37 +33,74 @@ typedef struct Car
 
 int main()
 {
-    int pfd[2];
+    if (sem_init(&component_sem, 0, 1) == -1)
+    {
+        perror("sem_init");
+        exit(1);
+    }
+    int i = 0;
+    int pipe1[2]; // 서버 -> 클라이언트1 쓰기용
+    int pipe2[2]; // 클라이언트 -> 서버 쓰기용 (클라이언트 공용)
+    int pipe3[2]; // 서버 -> 클라이언트2 쓰기용
 
-    /* 파이프를 개방한다 */
-    if (pipe(pfd) == -1)
+    if (pipe(pipe1) == -1)
         fatal("pipe call");
 
-    /* p[0]의 O_NONBLOCK 플래그를 1로 설정한다 */
-    if (fcntl(pfd[0], F_SETFL, O_NONBLOCK) == -1)
+    if (fcntl(pipe1[0], F_SETFL, O_NONBLOCK) == -1)
         fatal("fcntl call");
 
-    switch (fork())
+    if (pipe(pipe2) == -1)
+        fatal("pipe call");
+
+    if (fcntl(pipe2[0], F_SETFL, O_NONBLOCK) == -1)
+        fatal("fcntl call");
+
+    if (pipe(pipe3) == -1)
+        fatal("pipe call");
+
+    if (fcntl(pipe3[0], F_SETFL, O_NONBLOCK) == -1)
+        fatal("fcntl call");
+
+    while (i < 2)
     {
-    case -1: /* 오류 */
-        fatal("fork call");
-    case 0: /* 자식 */
-        client(pfd);
-    default: /* 부모 */
-        server(pfd);
+        switch (fork())
+        {
+        case -1:
+            fatal("fork call");
+        case 0:
+            if (i == 0)
+            {
+                client(pipe1, pipe2, 1);
+            }
+            else
+            {
+                client(pipe3, pipe2, 2);
+            }
+        default:
+            i++;
+            if (i == 2)
+            {
+                server(pipe1, pipe2, pipe3);
+            }
+        }
     }
 }
 
-int client(int p[2])
+int client(int p1[2], int p2[2], int thread_num)
 {
+    if (sem_init(&client_component_sem, 0, 1) == -1)
+    {
+        perror("sem_init");
+        exit(1);
+    }
     int nread;
-    Component *componentp = (Component *)malloc(sizeof(Component));
     pthread_t thread[3];
     Car *headCar = (Car *)malloc(sizeof(Car));
-    Car *currentCar = headCar;
     headCar->next = NULL;
+    char inbuf[MSGSIZE];
 
-    close(p[1]); /* 쓰기를 닫는다 */
+    close(p1[1]); /* 쓰기를 닫는다 */
+    close(p2[0]); /* 읽기를 닫는다 */
 
     int err_code = pthread_create(&thread[0], NULL, makeCar, (void *)headCar); // 차를 만든다.
     if (err_code)
@@ -86,10 +125,15 @@ int client(int p[2])
 
     for (;;)
     {
-        switch (nread = read(p[0], componentp, sizeof(Component)))
+        if (component_number2 < 3)
+        {
+            write(p2[1], &thread_num, sizeof(int));
+            sleep(1);
+        }
+
+        switch (nread = read(p1[0], inbuf, MSGSIZE))
         {
         case -1:
-            /* 파이프에 아무것도 없는지 검사한다. */
             if (errno == EAGAIN)
             {
                 printf("(pipe empty)\n");
@@ -99,34 +143,35 @@ int client(int p[2])
             else
                 fatal("read call");
         case 0:
-            /* 파이프가 닫혔음. */
             printf("End of conversation\n");
             exit(0);
         default:
-            printf("%d components received\n", (componentp->component));
-            currentCar->next = (Car *)malloc(sizeof(Car));
-            currentCar = currentCar->next;
-            currentCar->isCreated = false;
-            currentCar->isPainted = false;
-            currentCar->isInspected = false;
-            currentCar->next = NULL;
+            printf("%s received\n", inbuf);
+            sem_wait(&client_component_sem);
+            component_number2++;
+            sem_post(&client_component_sem);
         }
     }
 }
 
-int server(int p[2])
+int server(int p1[2], int p2[2], int p3[2])
 {
-    Component *componentp = (Component *)malloc(sizeof(Component));
-    componentp->component = 0;
 
-    close(p[0]);
+    close(p1[0]); // 읽기를 닫는다
+    close(p2[1]); // 쓰기를 닫는다
+    close(p3[0]); // 쓰기를 닫는다
     pthread_t thread[100];
     int i = 0;
+    int *client_thread_number = (int *)malloc(sizeof(int));
+    int nread;
+    char *cmp = "component";
 
     int err_code;
-    printf("In main: creating thread %d\n", i);
+
+    for (int i = 0; i < 3; i++)
     {
-        err_code = pthread_create(&thread[i], NULL, CreateComponent, (void *)componentp);
+
+        err_code = pthread_create(&thread[i], NULL, CreateComponent, NULL);
         if (err_code)
         {
             printf("ERROR code is %d\n", err_code);
@@ -134,19 +179,41 @@ int server(int p[2])
         }
     }
     printf("thread created\n");
+
     for (;;)
     {
-        if (componentp->component > 0)
+        switch (nread = read(p2[0], client_thread_number, sizeof(int)))
         {
-            printf("%d components has send to client \n", componentp->component);
-            if (write(p[1], componentp, sizeof(Component)) == -1)
-                fatal("write call");
-            else
+        case -1:
+            if (errno == EAGAIN)
             {
-                componentp->component--;
+                printf("(pipe empty)\n");
+                sleep(1);
+                break;
+            }
+            else
+                fatal("read call");
+        case 0:
+            printf("End of conversation\n");
+            exit(0);
+        default:
+            printf("request from : %d th thread\n", *client_thread_number);
+            if (component_number > 0)
+            {
+                sem_wait(&component_sem);
+                component_number--;
+                sem_post(&component_sem);
+                if (client_thread_number == 0)
+                {
+                    write(p1[1], cmp, MSGSIZE);
+                    continue;
+                }
+                else if (client_thread_number == 1)
+                {
+                    write(p3[1], cmp, MSGSIZE);
+                }
             }
         }
-        sleep(2);
     }
 }
 
@@ -158,12 +225,14 @@ int fatal(char *s) /* 오류 메시지를 프린트하고 죽는다. */
 
 void *CreateComponent(void *ptr)
 {
-    Component *componentp = ptr;
     for (;;)
     {
-        // 3초에 한 번 number_of_compenets의 값을 1 증가시킨다.
-        componentp->component++;
-        printf("number of component = %d\n", componentp->component);
+        if (component_number < 100)
+        {
+            sem_wait(&component_sem);
+            component_number++;
+            sem_post(&component_sem);
+        }
         sleep(1);
     }
 }
@@ -174,11 +243,18 @@ void *makeCar(void *ptr)
     Car *current_made_car = ptr;
     for (;;)
     {
-        if (current_made_car->next != NULL)
+        if (component_number2 > 0)
         {
+            sem_wait(&client_component_sem);
+            component_number2--;
+            sem_post(&client_component_sem);
+            current_made_car->next = (Car *)malloc(sizeof(Car));
             current_made_car = current_made_car->next;
             current_made_car->isCreated = true;
-            printf("car %d is created\n", i);
+            current_made_car->isPainted = false;
+            current_made_car->isInspected = false;
+            current_made_car->next = NULL;
+            printf("car %d is created, client have %d components\n", i, component_number2);
             i++;
             sleep(3);
         }
@@ -208,7 +284,7 @@ void *inspectCar(void *ptr)
     Car *current_inspect_target = ptr;
     for (;;)
     {
-        if (current_inspect_target->next != NULL && current_inspect_target->next->isCreated && current_inspect_target->next->isPainted)
+        if (current_inspect_target->next != NULL && current_inspect_target->next->isPainted)
         {
             Car *inpected_car = current_inspect_target;
             current_inspect_target = current_inspect_target->next;
