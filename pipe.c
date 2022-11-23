@@ -235,7 +235,7 @@ void *CreateComponent(void *ptr)
 {
     for (;;)
     {
-        if (component_number < 100)
+        if (component_number < 20)
         {
             sem_wait(&component_sem);
             component_number++;
