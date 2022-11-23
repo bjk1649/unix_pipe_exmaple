@@ -14,7 +14,7 @@ static sem_t client1_component_sem;
 static sem_t client2_component_sem;
 
 int client(int *, int *, int);
-int server(int[][], int *);
+int server(int[][2], int *);
 void *CreateComponent(void *ptr);
 int fatal(char *s);
 void *makeCar(void *ptr);
@@ -84,7 +84,7 @@ int client(int p1[2], int p2[2], int thread_num)
 {
     if (thread_num == 0)
     {
-        if (sem_init(&client1_component_sem, 0, 0) == -1)
+        if (sem_init(&client1_component_sem, 0, 1) == -1)
         {
             perror("sem_init");
             exit(1);
@@ -92,7 +92,7 @@ int client(int p1[2], int p2[2], int thread_num)
     }
     else
     {
-        if (sem_init(&client2_component_sem, 0, 0) == -1)
+        if (sem_init(&client2_component_sem, 0, 1) == -1)
         {
             perror("sem_init");
             exit(1);
@@ -151,16 +151,18 @@ int client(int p1[2], int p2[2], int thread_num)
             printf("End of conversation\n");
             exit(0);
         default:
-            printf("%s received\n", inbuf);
+            printf("%d - thread: %s received\n", thread_num, inbuf);
             switch (thread_num)
             {
             case 0:
                 sem_wait(&client1_component_sem);
+                printf("client1_component_sem wait");
                 client_component_number[thread_num]++;
                 sem_post(&client1_component_sem);
                 break;
             case 1:
                 sem_wait(&client2_component_sem);
+                printf("client2_component_sem wait");
                 client_component_number[thread_num]++;
                 sem_post(&client2_component_sem);
                 break;
@@ -169,7 +171,7 @@ int client(int p1[2], int p2[2], int thread_num)
     }
 }
 
-int server(int p1[2][2], int p2[2])
+int server(int p1[][2], int p2[2])
 {
     for (int i = 0; i < 2; i++)
     {
