@@ -41,7 +41,7 @@ int main()
         exit(1);
     }
     int i = 0;
-    int pipe1[2][2]; // 서버 -> 클라이언트1 쓰기용
+    int pipe1[2][2]; // 서버 -> 클라이언트 쓰기용
     int pipe2[2];    // 클라이언트 -> 서버 쓰기용 (클라이언트 공용)
 
     if (pipe(pipe1[0]) == -1)
@@ -256,6 +256,8 @@ void *makeCar(void *ptr)
     {
         if (client_component_number[thread_num] > 0)
         {
+
+            sleep(3);
             switch (thread_num)
             {
             case 0:
@@ -277,7 +279,6 @@ void *makeCar(void *ptr)
             current_made_car->next = NULL;
             printf("car %d is created, client have %d components\n", i, client_component_number[thread_num]);
             i++;
-            sleep(3);
         }
     }
 }
@@ -290,11 +291,12 @@ void *paintCar(void *ptr)
     {
         if ((current_painted_car->next != NULL) && current_painted_car->next->isCreated)
         {
+
+            sleep(1);
             current_painted_car = current_painted_car->next;
             current_painted_car->isPainted = true;
             printf("car %d is painted\n", i);
             i++;
-            sleep(1);
         }
     }
 }
@@ -307,13 +309,13 @@ void *inspectCar(void *ptr)
     {
         if (current_inspect_target->next != NULL && current_inspect_target->next->isPainted)
         {
+            sleep(2);
             Car *inpected_car = current_inspect_target;
             current_inspect_target = current_inspect_target->next;
             current_inspect_target->isInspected = true;
             free(inpected_car);
             printf("car %d is inspected\n", i);
             i++;
-            sleep(2);
         }
     }
 }
