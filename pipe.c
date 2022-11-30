@@ -8,6 +8,9 @@
 #include <semaphore.h>
 
 #define MSGSIZE 16
+#define MAKE_CAR_DELAY 1
+#define PAINT_CAR_DELAY 1
+#define INSPECT_CAR_DELAY 1
 
 static sem_t component_sem;
 static sem_t client1_component_sem;
@@ -257,7 +260,7 @@ void *makeCar(void *ptr)
         if (client_component_number[thread_num] > 0)
         {
 
-            sleep(3);
+            sleep(MAKE_CAR_DELAY);
             switch (thread_num)
             {
             case 0:
@@ -292,7 +295,7 @@ void *paintCar(void *ptr)
         if ((current_painted_car->next != NULL) && current_painted_car->next->isCreated)
         {
 
-            sleep(1);
+            sleep(PAINT_CAR_DELAY);
             current_painted_car = current_painted_car->next;
             current_painted_car->isPainted = true;
             printf("car %d is painted\n", i);
@@ -309,7 +312,7 @@ void *inspectCar(void *ptr)
     {
         if (current_inspect_target->next != NULL && current_inspect_target->next->isPainted)
         {
-            sleep(2);
+            sleep(INSPECT_CAR_DELAY);
             Car *inpected_car = current_inspect_target;
             current_inspect_target = current_inspect_target->next;
             current_inspect_target->isInspected = true;
