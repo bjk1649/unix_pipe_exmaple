@@ -5,6 +5,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <time.h>
 #include <semaphore.h>
 
 #define MSGSIZE 16
@@ -17,15 +18,17 @@ static sem_t client1_component_sem;
 static sem_t client2_component_sem;
 
 int client(int *, int *, int);
-int server(int[][2], int *);
+int server(int[][2], int[][2]);
 void *CreateComponent(void *ptr);
 int fatal(char *s);
 void *makeCar(void *ptr);
 void *paintCar(void *ptr);
 void *inspectCar(void *ptr);
+void *requestComponent(void *ptr);
 
 int component_number = 0;
 int client_component_number[2] = {0, 0};
+struct timespec begin;
 
 typedef struct Car
 {
@@ -36,6 +39,12 @@ typedef struct Car
     struct Car *next;
 } Car;
 
+typedef struct Dataobject
+{
+    int thread_num;
+    int pipe[2];
+} Dataobject;
+
 int main()
 {
     if (sem_init(&component_sem, 0, 1) == -1)
@@ -45,7 +54,7 @@ int main()
     }
     int i = 0;
     int pipe1[2][2]; // 서버 -> 클라이언트 쓰기용
-    int pipe2[2];    // 클라이언트 -> 서버 쓰기용 (클라이언트 공용)
+    int pipe2[2][2]; // 클라이언트 -> 서버 쓰기용 (클라이언트 공용)
 
     if (pipe(pipe1[0]) == -1)
         fatal("pipe call");
@@ -59,10 +68,16 @@ int main()
     if (fcntl(pipe1[1][0], F_SETFL, O_NONBLOCK) == -1)
         fatal("fcntl call");
 
-    if (pipe(pipe2) == -1)
+    if (pipe(pipe2[0]) == -1)
         fatal("pipe call");
 
-    if (fcntl(pipe2[0], F_SETFL, O_NONBLOCK) == -1)
+    if (fcntl(pipe2[0][0], F_SETFL, O_NONBLOCK) == -1)
+        fatal("fcntl call");
+
+    if (pipe(pipe2[1]) == -1)
+        fatal("pipe call");
+
+    if (fcntl(pipe2[1][0], F_SETFL, O_NONBLOCK) == -1)
         fatal("fcntl call");
 
     while (i < 2)
@@ -72,7 +87,7 @@ int main()
         case -1:
             fatal("fork call");
         case 0:
-            client(pipe1[i], pipe2, i);
+            client(pipe1[i], pipe2[i], i);
         default:
             i++;
             if (i == 2)
@@ -102,13 +117,18 @@ int client(int p1[2], int p2[2], int thread_num)
         }
     }
     int nread;
-    pthread_t thread[3];
+    struct timespec begin, end;
+    pthread_t thread[4];
     Car *headCar = (Car *)malloc(sizeof(Car));
     headCar->thread_num = thread_num;
     headCar->next = NULL;
     char inbuf[MSGSIZE];
-    close(p1[1]); // 서버 -> 클라이언트 쓰기용 닫기
-    close(p2[0]); /* 읽기를 닫는다 */
+    Dataobject *d1 = (Dataobject *)malloc(sizeof(Dataobject));
+    d1->thread_num = thread_num;
+    d1->pipe[0] = p2[0];
+    d1->pipe[1] = p2[1];
+    close(p1[1]);
+    close(p2[0]);
 
     int err_code = pthread_create(&thread[0], NULL, makeCar, (void *)headCar); // 차를 만든다.
     if (err_code)
@@ -130,22 +150,20 @@ int client(int p1[2], int p2[2], int thread_num)
         printf("ERROR code is %d\n", err_code);
         exit(1);
     }
+    err_code = pthread_create(&thread[3], NULL, requestComponent, (void *)d1); // 차를 검사한 후 출고한다.
+    if (err_code)
+    {
+        printf("ERROR code is %d\n", err_code);
+        exit(1);
+    }
 
     for (;;)
     {
-        if (client_component_number[thread_num] < 3)
-        {
-            write(p2[1], &thread_num, sizeof(int));
-            sleep(1);
-        }
-
-        switch (nread = read(p1[0], inbuf, MSGSIZE))
+        switch (nread = read(p1[0], &begin, sizeof(struct timespec)))
         {
         case -1:
             if (errno == EAGAIN)
             {
-                printf("(pipe empty)\n");
-                sleep(1);
                 break;
             }
             else
@@ -154,18 +172,24 @@ int client(int p1[2], int p2[2], int thread_num)
             printf("End of conversation\n");
             exit(0);
         default:
-            printf("%d - thread: %s received\n", thread_num, inbuf);
+            clock_gettime(CLOCK_MONOTONIC, &end);
+            if (end.tv_nsec - begin.tv_nsec < 0)
+            {
+                printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec - 1, end.tv_nsec - begin.tv_nsec + 1000000000);
+            }
+            else
+            {
+                printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec, end.tv_nsec - begin.tv_nsec);
+            }
             switch (thread_num)
             {
             case 0:
                 sem_wait(&client1_component_sem);
-                printf("client1_component_sem wait");
                 client_component_number[thread_num]++;
                 sem_post(&client1_component_sem);
                 break;
             case 1:
                 sem_wait(&client2_component_sem);
-                printf("client2_component_sem wait");
                 client_component_number[thread_num]++;
                 sem_post(&client2_component_sem);
                 break;
@@ -174,13 +198,14 @@ int client(int p1[2], int p2[2], int thread_num)
     }
 }
 
-int server(int p1[][2], int p2[2])
+int server(int p1[][2], int p2[][2])
 {
     for (int i = 0; i < 2; i++)
     {
-        close(p1[i][0]); /* 읽기를 닫는다 */
+        close(p1[i][0]);
     }
-    close(p2[1]); /* 쓰기를 닫는다 */
+    close(p2[0][1]);
+    close(p2[1][1]);
     pthread_t thread[100];
     int i = 0;
     int *client_thread_number = (int *)malloc(sizeof(int));
@@ -203,7 +228,8 @@ int server(int p1[][2], int p2[2])
 
     for (;;)
     {
-        switch (nread = read(p2[0], client_thread_number, sizeof(int)))
+
+        switch (nread = read(p2[0][0], client_thread_number, sizeof(int)))
         {
         case -1:
             if (errno == EAGAIN)
@@ -218,19 +244,46 @@ int server(int p1[][2], int p2[2])
             printf("End of conversation\n");
             exit(0);
         default:
-            printf("request from : %d th thread\n", *client_thread_number);
             if (component_number > 0)
             {
                 sem_wait(&component_sem);
                 component_number--;
                 sem_post(&component_sem);
-                write(p1[*client_thread_number][1], cmp, MSGSIZE);
+                clock_gettime(CLOCK_MONOTONIC, &begin);
+                write(p1[*client_thread_number][1], &begin, sizeof(struct timespec));
             }
         }
+
+        switch (nread = read(p2[1][0], client_thread_number, sizeof(int)))
+        {
+        case -1:
+            if (errno == EAGAIN)
+            {
+                printf("(pipe empty)\n");
+                sleep(1);
+                break;
+            }
+            else
+                fatal("read call");
+        case 0:
+            printf("End of conversation\n");
+            exit(0);
+        default:
+            if (component_number > 0)
+            {
+                sem_wait(&component_sem);
+                component_number--;
+                sem_post(&component_sem);
+                clock_gettime(CLOCK_MONOTONIC, &begin);
+                write(p1[*client_thread_number][1], &begin, sizeof(struct timespec));
+            }
+        }
+
+        sleep(1);
     }
 }
 
-int fatal(char *s) /* 오류 메시지를 프린트하고 죽는다. */
+int fatal(char *s)
 {
     perror(s);
     exit(1);
@@ -250,6 +303,21 @@ void *CreateComponent(void *ptr)
     }
 }
 
+void *requestComponent(void *data)
+{
+    Dataobject *d = (Dataobject *)data;
+    int pipe[2];
+    pipe[1] = d->pipe[1];
+    int thread_num = d->thread_num;
+    for (;;)
+    {
+        if (client_component_number[thread_num] < 3)
+        {
+            write(pipe[1], &thread_num, sizeof(int));
+        }
+    }
+}
+
 void *makeCar(void *ptr)
 {
     int i = 0;
@@ -259,8 +327,6 @@ void *makeCar(void *ptr)
     {
         if (client_component_number[thread_num] > 0)
         {
-
-            sleep(MAKE_CAR_DELAY);
             switch (thread_num)
             {
             case 0:
@@ -277,10 +343,10 @@ void *makeCar(void *ptr)
             current_made_car->next = (Car *)malloc(sizeof(Car));
             current_made_car = current_made_car->next;
             current_made_car->isCreated = true;
+            current_made_car->thread_num = thread_num;
             current_made_car->isPainted = false;
             current_made_car->isInspected = false;
             current_made_car->next = NULL;
-            printf("car %d is created, client have %d components\n", i, client_component_number[thread_num]);
             i++;
         }
     }
@@ -294,11 +360,8 @@ void *paintCar(void *ptr)
     {
         if ((current_painted_car->next != NULL) && current_painted_car->next->isCreated)
         {
-
-            sleep(PAINT_CAR_DELAY);
             current_painted_car = current_painted_car->next;
             current_painted_car->isPainted = true;
-            printf("car %d is painted\n", i);
             i++;
         }
     }
@@ -312,13 +375,11 @@ void *inspectCar(void *ptr)
     {
         if (current_inspect_target->next != NULL && current_inspect_target->next->isPainted)
         {
-            sleep(INSPECT_CAR_DELAY);
             Car *inpected_car = current_inspect_target;
             current_inspect_target = current_inspect_target->next;
             current_inspect_target->isInspected = true;
-            free(inpected_car);
-            printf("car %d is inspected\n", i);
             i++;
+            free(inpected_car);
         }
     }
 }
