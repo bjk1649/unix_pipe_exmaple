@@ -172,15 +172,15 @@ int client(int p1[2], int p2[2], int thread_num)
             printf("End of conversation\n");
             exit(0);
         default:
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            if (end.tv_nsec - begin.tv_nsec < 0)
-            {
-                printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec - 1, end.tv_nsec - begin.tv_nsec + 1000000000);
-            }
-            else
-            {
-                printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec, end.tv_nsec - begin.tv_nsec);
-            }
+            // clock_gettime(CLOCK_MONOTONIC, &end);
+            // if (end.tv_nsec - begin.tv_nsec < 0)
+            // {
+            //     printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec - 1, end.tv_nsec - begin.tv_nsec + 1000000000);
+            // }
+            // else
+            // {
+            //     printf("Client %d : %ld.%09ld sec\n", thread_num, end.tv_sec - begin.tv_sec, end.tv_nsec - begin.tv_nsec);
+            // }
             switch (thread_num)
             {
             case 0:
@@ -379,6 +379,7 @@ void *inspectCar(void *ptr)
             current_inspect_target = current_inspect_target->next;
             current_inspect_target->isInspected = true;
             i++;
+            printf("%d client: %d car is inspected\n", current_inspect_target->thread_num, i);
             free(inpected_car);
         }
     }
